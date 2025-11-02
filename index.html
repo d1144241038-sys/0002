@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SDGs 不塑永續-淨灘</title>
+  <style>
+    :root{
+      --header-height:64px;
+      --beach-sand:#f2dba4;
+      --sea:#87ceeb;
+      --text:#0b1320;
+    }
+    html,body{height:100%;margin:0;font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans CJK TC', 'Microsoft JhengHei', sans-serif;color:var(--text);}
+    .page{
+      min-height:100%;display:flex;flex-direction:column;
+      background: linear-gradient(to top, var(--beach-sand) 30%, var(--sea) 0%);
+      background-repeat:no-repeat; background-attachment:fixed;
+    }
+    header{
+      height:var(--header-height);display:flex;align-items:center;justify-content:space-between;padding:8px 18px;
+      backdrop-filter: blur(2px);
+    }
+    .title{font-size:20px;font-weight:800;}
+    .score-panel{font-size:16px;text-align:right}
+    .game-area{flex:1;position:relative;overflow:hidden}
+    /* 海水和沙灘的視覺（前景透明） */
+    .horizon{position:absolute;left:0;right:0;top:0;height:60%;pointer-events:none}
+    .sand{position:absolute;left:0;right:0;bottom:0;height:40%;background:linear-gradient(180deg,#f5e6b8, #e6c58a);}
+    .sea{position:absolute;left:0;right:0;top:0;height:60%;background:linear-gradient(180deg,#bfe9ff,#66c2ff);}
+
+    /* 垃圾容器：放在頁面下半部（沙灘區） */
+    .beach{
+      position:absolute;left:0;right:0;bottom:0;height:55%;pointer-events:auto;}
+
+    .trash{
+      position:absolute;transform-origin:center center;cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:center;
+      transition:transform 300ms ease, opacity 300ms ease;box-shadow:0 4px 8px rgba(0,0,0,0.12);
+    }
+    .trash .icon{font-size:20px;filter:drop-shadow(0 2px 0 rgba(0,0,0,0.06));}
+
+    /* 依體積大小不同的尺寸 */
+    .size-small{width:34px;height:34px;font-size:18px;border-radius:6px}
+    .size-medium{width:54px;height:54px;font-size:26px;border-radius:8px}
+    .size-large{width:80px;height:80px;font-size:34px;border-radius:10px}
+
+    /* 點擊效果 */
+    .collected{transform:scale(0.1) rotate(720deg);opacity:0}
+
+    /* 任務完成遮罩 */
+    .overlay{position:fixed;left:0;right:0;top:0;bottom:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:40;}
+    .modal{background:white;padding:28px;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.3);text-align:center;width:320px}
+    .modal h2{margin:0 0 8px;font-size:20px}
+    .btn{display:inline-block;padding:10px 16px;border-radius:8px;background:#0b84ff;color:#fff;text-decoration:none;margin:8px 6px;cursor:pointer}
+
+    /* 小說明 */
+    .hud{position:fixed;left:18px;bottom:18px;background:rgba(255,255,255,0.88);padding:10px 12px;border-radius:10px;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,0.08)}
+
+    @media (max-width:480px){.title{font-size:16px}.score-panel{font-size:14px}}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="title">SDGs 不塑永續-淨灘</div>
+      <div class="score-panel">得分: <span id="score">0</span>  已撿: <span id="collected">0</span>/<span id="total">50</span></div>
+    </header>
+
+    <main class="game-area" id="game">
+      <div class="horizon">
+        <div class="sea"></div>
+        <div class="sand"></div>
+      </div>
+
+      <div class="beach" id="beach"></div>
+
+    </main>
+
+    <div class="hud">點擊沙灘上的垃圾來撿起它們！每種垃圾依體積有不同分數。</div>
+  </div>
+
+  <template id="trash-template">
+    <div class="trash">
+      <div class="icon"></div>
+    </div>
+  </template>
+
+  <script>
+    // 遊戲設定
+    const TOTAL = 50;
+    const beach = document.getElementById('beach');
+    const scoreEl = document.getElementById('score');
+    const collectedEl = document.getElementById('collected');
+    const totalEl = document.getElementById('total');
+    totalEl.textContent = TOTAL;
+
+    // 垃圾種類（使用 emoji 作為簡易圖示）
+    const TYPES = [
+      {name:'保特瓶', icon:'🧴'},
+      {name:'紙類', icon:'🗞️'},
+      {name:'餐盒', icon:'🍱'},
+      {name:'塑膠袋', icon:'🛍️'},
+      {name:'飲料杯', icon:'🥤'},
+      {name:'漂流垃圾', icon:'🪵'}
+    ];
+
+    // 分數對應
+    const SCORES = { 'small':10, 'medium':20, 'large':30 };
+
+    let score = 0;
+    let collected = 0;
+
+    function rand(min,max){ return Math.random()*(max-min)+min }
+
+    function placeTrash(){
+      const rect = beach.getBoundingClientRect();
+      // 使用百分比定位，讓重新載入時相對位置一致
+      for(let i=0;i<TOTAL;i++){
+        const t = TYPES[Math.floor(Math.random()*TYPES.length)];
+        const tpl = document.getElementById('trash-template');
+        const node = tpl.content.firstElementChild.cloneNode(true);
+        const icon = node.querySelector('.icon');
+        icon.textContent = t.icon || ' ';
+        node.dataset.type = t.name;
+
+        // 決定大小 (small/medium/large)
+        const r = Math.random();
+        const size = r<0.45 ? 'small' : (r<0.85 ? 'medium' : 'large');
+        node.classList.add('size-'+size);
+        node.dataset.size = size;
+        node.dataset.score = SCORES[size];
+
+        // 隨機位置：只在頁面的下半部（沙灘區）
+        const left = rand(2, 92); // 百分比
+        const top = rand(55, 90); // 放在下半部 (55% 至 90%)
+        node.style.left = left + '%';
+        node.style.top = top + '%';
+
+        // 隨機旋轉
+        const rot = Math.floor(rand(0,360));
+        node.style.transform = `rotate(${rot}deg)`;
+
+        // 少許隨機偏移，避免完全重疊
+        node.style.zIndex = 10 + Math.floor(rand(0,50));
+
+        // 點擊行為
+        node.addEventListener('click', function(e){
+          collectTrash(node);
+        },{once:true});
+
+        beach.appendChild(node);
+      }
+    }
+
+    function collectTrash(node){
+      const s = Number(node.dataset.score) || 0;
+      score += s;
+      collected += 1;
+      scoreEl.textContent = score;
+      collectedEl.textContent = collected;
+
+      // 撿起動畫
+      node.classList.add('collected');
+      setTimeout(()=>{ if(node && node.remove) node.remove() }, 400);
+
+      if(collected >= TOTAL) showSuccess();
+    }
+
+    function showSuccess(){
+      const overlay = document.createElement('div'); overlay.className='overlay';
+      const modal = document.createElement('div'); modal.className='modal';
+      modal.innerHTML = `\n        <h2>任務成功 🎉</h2>\n        <p>你已撿完所有垃圾！總得分：<strong>${score}</strong></p>\n        <div style=\"margin-top:12px\">\n          <button class=\"btn\" id=\"next\">前往下一關</button>\n          <button class=\"btn\" id=\"restart\">重新挑戰</button>\n        </div>`;
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      document.getElementById('restart').addEventListener('click',()=>{
+        overlay.remove(); resetGame();
+      });
+      document.getElementById('next').addEventListener('click',()=>{
+        overlay.remove(); alert('下一關範例：可在程式中新增更高難度（例如更多垃圾、定時沙灘潮汐、限制時間等）');
+      });
+    }
+
+    function resetGame(){
+      // 清除並重新生成
+      score = 0; collected = 0;
+      scoreEl.textContent = score; collectedEl.textContent = collected;
+      beach.innerHTML = '';
+      placeTrash();
+    }
+
+    // 初始化
+    window.addEventListener('load', ()=>{
+      placeTrash();
+    });
+
+    // 允許按 R 重置（測試用）
+    window.addEventListener('keydown', (e)=>{ if(e.key.toLowerCase()==='r'){ resetGame() } });
+  </script>
+</body>
+</html>
